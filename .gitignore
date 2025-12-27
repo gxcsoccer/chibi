@@ -137,3 +137,11 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Bundled ripgrep binaries (downloaded during postinstall)
+src/tools/ripgrep/bin/*
+!src/tools/ripgrep/bin/.gitkeep
+.chibi/
+.claude/
+docs
+package-lock.json

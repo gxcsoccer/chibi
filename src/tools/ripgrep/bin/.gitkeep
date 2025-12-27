@@ -1,0 +1,3 @@
+# This directory contains bundled ripgrep binaries
+# They are downloaded during `npm install` via postinstall script
+# See scripts/download-ripgrep.ts for details
