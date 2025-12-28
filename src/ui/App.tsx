@@ -205,7 +205,20 @@ export function App({ query, eventEmitter, verbose = false, onComplete, onError 
       case 'compression':
       case 'recall':
       case 'budget_warning':
+      case 'messages_discarded':
         // 这些事件可以用于未来扩展，暂时不显示
+        break;
+
+      // Orchestrator events
+      case 'phase_start':
+      case 'phase_end':
+      case 'synthesis_start':
+      case 'synthesis_complete':
+      case 'synthesis_error':
+      case 'orchestrator_start':
+      case 'orchestrator_complete':
+      case 'orchestrator_error':
+        // Orchestrator 事件，可以用于未来扩展
         break;
 
       default: {

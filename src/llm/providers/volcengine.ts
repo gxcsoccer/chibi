@@ -167,6 +167,16 @@ export class VolcengineClient implements LLMClient {
 
   private async createChatCompletion(
     messages: LLMMessage[],
+    options: { tools?: ToolDefinition[]; systemPrompt?: string } | undefined,
+    stream: false
+  ): Promise<OpenAI.Chat.ChatCompletion>;
+  private async createChatCompletion(
+    messages: LLMMessage[],
+    options: { tools?: ToolDefinition[]; systemPrompt?: string } | undefined,
+    stream: true
+  ): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>>;
+  private async createChatCompletion(
+    messages: LLMMessage[],
     options?: {
       tools?: ToolDefinition[];
       systemPrompt?: string;

@@ -194,10 +194,11 @@ export interface LLMTurn {
   };
   /** Decision made based on this turn */
   decision: {
-    type: 'tool_call' | 'delegate' | 'done' | 'thinking' | 'invalid_tool_call' | 'requires_self_check';
+    type: 'tool_call' | 'delegate' | 'done' | 'thinking' | 'invalid_tool_call' | 'requires_self_check' | 'hallucination_detected';
     name?: string;
     arguments?: Record<string, unknown>;
     result?: string;
+    cleanedContent?: string;
   };
   /** Tool execution result (if applicable) */
   toolResult?: {

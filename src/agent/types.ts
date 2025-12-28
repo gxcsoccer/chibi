@@ -13,7 +13,8 @@ export type AgentDecision =
   | { type: 'done'; result: string }
   | { type: 'thinking'; content: string }
   | { type: 'invalid_tool_call'; content: string; detectedToolName?: string }
-  | { type: 'requires_self_check'; content: string };
+  | { type: 'requires_self_check'; content: string }
+  | { type: 'hallucination_detected'; content: string; cleanedContent: string };
 
 /**
  * Agent state
