@@ -16,9 +16,11 @@
     "chibi": "tsx bin/chibi.ts",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "typecheck": "tsc --noEmit",
+    "ci": "npm run lint && npm run typecheck && npm run test:coverage",
     "download:rg": "tsx scripts/download-ripgrep.ts",
     "download:rg:current": "tsx scripts/download-ripgrep.ts --current",
     "postinstall": "tsx scripts/download-ripgrep.ts --current"

@@ -272,10 +272,12 @@ export class InvestigatorAgent {
       this.trackKeyFiles(decision.name, decision.arguments, result.output);
 
       // Add assistant message (tool call description)
-      const toolCallDescription = response.content || `调用 ${decision.name} 工具`;
+      // Clean any hallucinated content before saving to conversation history
+      const rawContent = response.content || `调用 ${decision.name} 工具`;
+      const { cleaned: toolCallDescription } = this.cleanHallucinatedContent(rawContent);
       await this.contextManager.addMessage({
         role: 'assistant',
-        content: toolCallDescription,
+        content: toolCallDescription || `调用 ${decision.name} 工具`,
       });
 
       // Add tool result as user message
@@ -329,6 +331,29 @@ export class InvestigatorAgent {
 5. 结论
 
 只有自检通过后，才能再次输出 [INVESTIGATION_COMPLETE]。`,
+        metadata: { compressible: false },
+      });
+    } else if (decision.type === 'hallucination_detected') {
+      // Only save the cleaned content (before hallucination started)
+      // This prevents fake tool results from polluting the conversation history
+      if (decision.cleanedContent) {
+        await this.contextManager.addMessage({
+          role: 'assistant',
+          content: decision.cleanedContent,
+        });
+      }
+      await this.contextManager.addMessage({
+        role: 'user',
+        content: `⚠️ **检测到幻觉内容**
+
+你的回复中包含了虚假的工具执行结果。你不能在文本中"想象"工具的执行结果！
+
+**重要规则**：
+1. 必须通过 function calling API 调用工具
+2. 只有工具真正执行后返回的结果才是有效的
+3. 不要在回复中编造 "工具执行成功" 或文件内容
+
+请使用正确的 function call 格式调用工具继续调查。`,
         metadata: { compressible: false },
       });
     } else if (decision.type === 'done') {
@@ -442,6 +467,50 @@ export class InvestigatorAgent {
   }
 
   /**
+   * Hallucination patterns to detect fake tool results in LLM content
+   */
+  private static readonly HALLUCINATION_PATTERNS = [
+    /<\/user>/,                                    // Fake </user> tag
+    /工具\s*"[^"]+"\s*执行(成功|失败)/,              // Chinese: Tool "xxx" executed successfully/failed
+    /Tool\s*"[^"]+"\s*(executed|completed|failed)/i, // English variant
+    /^File:\s+[^\n]+\nLines:\s+\d+-\d+/m,          // Fake file content header
+  ];
+
+  /**
+   * Clean hallucinated content from text
+   * Returns the cleaned text with hallucinations removed
+   */
+  private cleanHallucinatedContent(content: string): { cleaned: string; hasHallucination: boolean } {
+    const patterns = InvestigatorAgent.HALLUCINATION_PATTERNS;
+    const hasHallucination = patterns.some(pattern => pattern.test(content));
+
+    if (!hasHallucination) {
+      return { cleaned: content, hasHallucination: false };
+    }
+
+    // Find the position of first hallucination marker
+    let cleanEndIndex = content.length;
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match && match.index !== undefined && match.index < cleanEndIndex) {
+        cleanEndIndex = match.index;
+      }
+    }
+
+    const cleaned = content.slice(0, cleanEndIndex).trim();
+    logger.warn(
+      {
+        originalLength: content.length,
+        cleanedLength: cleaned.length,
+        hallucinationStart: cleanEndIndex,
+      },
+      'Cleaned hallucinated content from LLM response'
+    );
+
+    return { cleaned, hasHallucination: true };
+  }
+
+  /**
    * Parse decision from LLM response
    */
   private parseDecision(content: string, toolCalls?: ToolCall[]): AgentDecision {
@@ -462,6 +531,17 @@ export class InvestigatorAgent {
         type: 'tool_call',
         name: rescuedToolCall.name,
         arguments: rescuedToolCall.arguments,
+      };
+    }
+
+    // Layer 3: Detect hallucinated tool results in content
+    // LLM sometimes "hallucinates" tool execution results instead of using function calling API
+    const { cleaned: cleanedContent, hasHallucination } = this.cleanHallucinatedContent(content);
+    if (hasHallucination) {
+      return {
+        type: 'hallucination_detected',
+        content,
+        cleanedContent,
       };
     }
 
@@ -751,6 +831,10 @@ export class InvestigatorAgent {
         }),
         ...(params.decision.type === 'requires_self_check' && {
           result: params.decision.content,
+        }),
+        ...(params.decision.type === 'hallucination_detected' && {
+          result: params.decision.content,
+          cleanedContent: params.decision.cleanedContent,
         }),
       },
       toolResult: params.toolExecutionResult,

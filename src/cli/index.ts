@@ -124,7 +124,6 @@ async function runAsk(
       eventEmitter,
       {
         maxInvestigationIterations: config.agent.maxIterations,
-        language: config.output.language,
         enableThinking: config.agent.enableThinking,
         thinkingBudget: config.agent.thinkingBudget,
       }

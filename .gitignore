@@ -145,3 +145,4 @@ src/tools/ripgrep/bin/*
 .claude/
 docs
 package-lock.json
+pnpm-lock.yaml

@@ -506,4 +506,531 @@ describe('InvestigatorAgent', () => {
       expect(result.iterations).toBeLessThan(20);
     });
   });
+
+  describe('Hallucination Detection', () => {
+    describe('Pattern Detection - </user> tag', () => {
+      it('should detect hallucination with </user> tag and no tool calls', async () => {
+        const hallucinatedResponse = {
+          content: `调用 ripgrep 工具
+
+我需要搜索相关代码。
+
+</user>
+工具 "ripgrep" 执行成功:
+
+Found 5 matches...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        // After hallucination feedback, model should use proper tool call
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        // Check that hallucination warning message was added
+        const addMessageCalls = vi.mocked(mockContextManager.addMessage).mock.calls;
+        const hallucinationWarning = addMessageCalls.find(
+          call => call[0].content?.includes('检测到幻觉内容')
+        );
+        expect(hallucinationWarning).toBeDefined();
+
+        // Check that hallucination_detected decision was recorded
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+
+      it('should save only cleaned content before hallucination marker', async () => {
+        const hallucinatedResponse = {
+          content: `这是有效的分析内容。
+
+让我继续调查。
+
+</user>
+工具执行成功，这是虚假的结果...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        await agent.investigate('Test query');
+
+        // Check that cleaned content was saved (without hallucination)
+        const addMessageCalls = vi.mocked(mockContextManager.addMessage).mock.calls;
+        const assistantMessages = addMessageCalls.filter(call => call[0].role === 'assistant');
+
+        // Find the message that should contain only cleaned content
+        const cleanedMessage = assistantMessages.find(
+          call => call[0].content?.includes('这是有效的分析内容')
+        );
+
+        // Verify the hallucinated part is not in any assistant message
+        const hasHallucination = assistantMessages.some(
+          call => call[0].content?.includes('工具执行成功，这是虚假的结果')
+        );
+
+        expect(cleanedMessage).toBeDefined();
+        expect(hasHallucination).toBe(false);
+      });
+    });
+
+    describe('Pattern Detection - Chinese tool execution', () => {
+      it('should detect hallucination with Chinese tool execution pattern', async () => {
+        const hallucinatedResponse = {
+          content: `分析代码...
+
+工具 "read_file" 执行成功:
+
+File: src/main.go
+Lines: 1-50
+...虚假内容...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        // Check that hallucination_detected decision was recorded
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+
+      it('should detect hallucination with tool execution failure pattern', async () => {
+        const hallucinatedResponse = {
+          content: `尝试读取文件...
+
+工具 "read_file" 执行失败:
+
+Error: File not found`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+    });
+
+    describe('Pattern Detection - English tool execution', () => {
+      it('should detect hallucination with English tool executed pattern', async () => {
+        const hallucinatedResponse = {
+          content: `Analyzing code...
+
+Tool "ripgrep" executed successfully:
+
+Found 10 matches...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+
+      it('should detect hallucination with Tool completed pattern', async () => {
+        const hallucinatedResponse = {
+          content: `Reading file...
+
+Tool "read_file" completed:
+
+Content here...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+    });
+
+    describe('Pattern Detection - File content header', () => {
+      it('should detect hallucination with fake file content header', async () => {
+        const hallucinatedResponse = {
+          content: `File: src/main.go
+Lines: 1-50
+────────────────────
+package main
+
+func main() {
+    // fake content
+}`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          hallucinatedResponse,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(true);
+      });
+    });
+
+    describe('No Hallucination', () => {
+      it('should not detect hallucination in normal content', async () => {
+        const normalResponse = {
+          content: `我正在分析代码结构。
+
+这个项目使用了 Go 语言。
+
+让我继续调查更多细节。`,
+          toolCalls: [{ name: 'read_file', arguments: { path: 'main.go' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const thinkResponse = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          normalResponse,
+          thinkResponse,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        const result = await agent.investigate('Test query');
+
+        // Should not have hallucination_detected decision
+        expect(result.decisions.some(d => d.type === 'hallucination_detected')).toBe(false);
+
+        // Should have normal tool_call decisions
+        expect(result.decisions.some(d => d.type === 'tool_call')).toBe(true);
+      });
+    });
+
+    describe('Hallucination with Valid Tool Calls', () => {
+      it('should clean hallucinated content even when valid tool calls exist', async () => {
+        // This simulates the case where LLM returns both valid tool calls AND hallucinated content
+        const responseWithBothToolCallAndHallucination = {
+          content: `我将搜索相关代码...
+
+</user>
+工具 "ripgrep" 执行成功:
+
+Found 5 matches in fake results...`,
+          toolCalls: [{ name: 'read_file', arguments: { path: 'real_file.go' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const thinkResponse = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          responseWithBothToolCallAndHallucination,
+          thinkResponse,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        await agent.investigate('Test query');
+
+        // Check that the hallucinated content was NOT saved to conversation
+        const addMessageCalls = vi.mocked(mockContextManager.addMessage).mock.calls;
+        const hasHallucinatedContent = addMessageCalls.some(
+          call => call[0].content?.includes('Found 5 matches in fake results')
+        );
+
+        expect(hasHallucinatedContent).toBe(false);
+
+        // Check that clean content was saved
+        const hasCleanContent = addMessageCalls.some(
+          call => call[0].content?.includes('我将搜索相关代码') &&
+                  !call[0].content?.includes('</user>')
+        );
+
+        expect(hasCleanContent).toBe(true);
+      });
+
+      it('should use fallback description when content is entirely hallucinated', async () => {
+        // Content starts with hallucination marker
+        const entirelyHallucinatedResponse = {
+          content: `</user>
+工具 "ripgrep" 执行成功:
+
+Fake results...`,
+          toolCalls: [{ name: 'read_file', arguments: { path: 'file.go' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const thinkResponse = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          entirelyHallucinatedResponse,
+          thinkResponse,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        await agent.investigate('Test query');
+
+        // Check that fallback description was used
+        const addMessageCalls = vi.mocked(mockContextManager.addMessage).mock.calls;
+        const hasFallback = addMessageCalls.some(
+          call => call[0].role === 'assistant' &&
+                  call[0].content?.includes('调用 read_file 工具')
+        );
+
+        expect(hasFallback).toBe(true);
+      });
+    });
+
+    describe('Multiple Hallucination Patterns', () => {
+      it('should detect first hallucination pattern in content with multiple patterns', async () => {
+        const multiPatternHallucination = {
+          content: `分析开始...
+
+</user>
+工具 "ripgrep" 执行成功:
+
+File: src/main.go
+Lines: 1-50
+
+工具 "read_file" 执行成功:
+
+More fake content...`,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const properToolCall = {
+          content: '',
+          toolCalls: [{ name: 'think', arguments: { thought: 'Self check' } }],
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        const doneResponse = {
+          content: '[INVESTIGATION_COMPLETE]\n\nDone',
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+
+        mockLLMClient = createMockLLMClient([
+          multiPatternHallucination,
+          properToolCall,
+          doneResponse,
+        ]);
+
+        const agent = new InvestigatorAgent(
+          mockLLMClient,
+          mockContextManager,
+          mockToolRegistry,
+          mockEventEmitter
+        );
+
+        await agent.investigate('Test query');
+
+        // Check that only content before first pattern was saved
+        const addMessageCalls = vi.mocked(mockContextManager.addMessage).mock.calls;
+        const cleanedMessages = addMessageCalls.filter(
+          call => call[0].role === 'assistant' && call[0].content?.includes('分析开始')
+        );
+
+        expect(cleanedMessages.length).toBeGreaterThan(0);
+
+        // Verify none of the hallucinated content was saved
+        const hasHallucination = addMessageCalls.some(
+          call => call[0].content?.includes('工具 "ripgrep" 执行成功')
+        );
+        expect(hasHallucination).toBe(false);
+      });
+    });
+  });
 });
